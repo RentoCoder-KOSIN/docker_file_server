@@ -1,0 +1,5 @@
+watchdog==3.0.0
+requests==2.31.0
+pypdf2==3.0.1
+python-magic==0.4.27
+Pillow==10.1.0

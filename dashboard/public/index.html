@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Python課題研究 ファイルサーバ</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow:wght@300;400;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0d0d0d;
+      --surface: #141414;
+      --border: #2a2a2a;
+      --border-bright: #404040;
+      --accent: #00ff88;
+      --accent-dim: #00ff8844;
+      --accent-glow: 0 0 12px #00ff8866;
+      --danger: #ff4455;
+      --danger-dim: #ff445522;
+      --text: #e0e0e0;
+      --text-dim: #666;
+      --mono: 'Share Tech Mono', monospace;
+      --sans: 'Barlow', sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* scanline overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.08) 2px,
+        rgba(0,0,0,0.08) 4px
+      );
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    /* ── HEADER ── */
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+      z-index: 10;
+    }
+
+    .logo {
+      font-family: var(--mono);
+      font-size: 18px;
+      letter-spacing: 4px;
+      color: var(--accent);
+      text-shadow: var(--accent-glow);
+    }
+
+    .logo span { color: var(--text-dim); }
+
+    .status-bar {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      display: flex;
+      gap: 24px;
+      align-items: center;
+    }
+
+    .status-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: var(--accent-glow);
+      display: inline-block;
+      margin-right: 6px;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* ── MAIN LAYOUT ── */
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 40px 32px;
+      display: grid;
+      gap: 28px;
+    }
+
+    /* ── SECTION LABEL ── */
+    .section-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 3px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    /* ── DROP ZONE ── */
+    .upload-zone {
+      border: 1px dashed var(--border-bright);
+      border-radius: 4px;
+      padding: 48px 32px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+      background: var(--surface);
+    }
+
+    .upload-zone:hover,
+    .upload-zone.dragover {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+      box-shadow: inset 0 0 40px var(--accent-dim);
+    }
+
+    .upload-zone.dragover { transform: scale(1.005); }
+
+    .upload-icon {
+      font-size: 36px;
+      margin-bottom: 12px;
+      opacity: 0.5;
+    }
+
+    .upload-zone h2 {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      color: var(--text);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+    }
+
+    .upload-zone p {
+      font-size: 12px;
+      color: var(--text-dim);
+      font-family: var(--mono);
+    }
+
+    .upload-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* ── PROGRESS ── */
+    .progress-bar {
+      height: 2px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+      display: none;
+    }
+
+    .progress-bar.active { display: block; }
+
+    .progress-fill {
+      height: 100%;
+      background: var(--accent);
+      box-shadow: var(--accent-glow);
+      transition: width 0.3s;
+      width: 0%;
+    }
+
+    /* ── TOAST ── */
+    #toast {
+      position: fixed;
+      bottom: 32px;
+      right: 32px;
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 12px 20px;
+      border-radius: 3px;
+      border-left: 3px solid var(--accent);
+      background: #1a1a1a;
+      color: var(--text);
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.25s;
+      z-index: 100;
+      max-width: 320px;
+    }
+
+    #toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    #toast.error { border-left-color: var(--danger); }
+
+    /* ── FILE TABLE ── */
+    .file-table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .table-header {
+      display: grid;
+      grid-template-columns: 1fr 100px 160px 120px;
+      padding: 10px 20px;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 2px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+    }
+
+    .file-row {
+      display: grid;
+      grid-template-columns: 1fr 100px 160px 120px;
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      align-items: center;
+      transition: background 0.15s;
+      animation: rowIn 0.3s ease both;
+    }
+
+    @keyframes rowIn {
+      from { opacity: 0; transform: translateX(-8px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    .file-row:last-child { border-bottom: none; }
+    .file-row:hover { background: rgba(255,255,255,0.03); }
+
+    .file-name {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--accent);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-size, .file-date {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .file-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 1px;
+      padding: 5px 12px;
+      border: 1px solid var(--border-bright);
+      border-radius: 2px;
+      background: transparent;
+      color: var(--text-dim);
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.15s;
+      text-transform: uppercase;
+    }
+
+    .btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      box-shadow: var(--accent-glow);
+    }
+
+    .btn-danger:hover {
+      border-color: var(--danger);
+      color: var(--danger);
+      box-shadow: 0 0 12px #ff445566;
+    }
+
+    /* ── EMPTY STATE ── */
+    .empty-state {
+      padding: 48px;
+      text-align: center;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text-dim);
+      letter-spacing: 2px;
+    }
+
+    /* ── STATS ROW ── */
+    .stats {
+      display: flex;
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .stat {
+      flex: 1;
+      background: var(--surface);
+      padding: 16px 20px;
+    }
+
+    .stat-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 3px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .stat-value {
+      font-family: var(--mono);
+      font-size: 22px;
+      color: var(--accent);
+      text-shadow: var(--accent-glow);
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Python課題研究<span> / </span>ファイルサーバ</div>
+  <div style="font-family:'Share Tech Mono',monospace; font-size:11px; color:#00ff8877; letter-spacing:2px;">
+    彩星工科高等学校
+  </div>
+  <div class="status-bar">
+    <span><span class="status-dot"></span>ONLINE</span>
+    <span id="header-count">0 FILES</span>
+    <span id="header-size">0 B</span>
+    <span id="authStatus" style="color:#00ff88;">GUEST</span>
+    <button id="authBtn" onclick="showLogin()" class="btn" style="padding:3px 10px;">LOGIN</button>
+  </div>
+</header>
+
+<main>
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-label">Total Files</div>
+      <div class="stat-value" id="stat-count">0</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Total Size</div>
+      <div class="stat-value" id="stat-size">0 B</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Go API</div>
+      <div class="stat-value" style="font-size:14px;padding-top:4px" id="stat-api">:8080</div>
+    </div>
+  </div>
+
+  <!-- Upload -->
+  <div id="uploadSection" style="display:none">
+    <div class="section-label">// Upload</div>
+    <div class="upload-zone" id="dropzone">
+      <input type="file" id="fileInput" multiple />
+      <div class="upload-icon">⬆</div>
+      <h2>Drop files here</h2>
+      <p>or click to select &nbsp;·&nbsp; max 32MB per file</p>
+    </div>
+    <div class="progress-bar" id="progressBar" style="margin-top:8px">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+  </div>
+
+  <!-- File list -->
+  <div>
+    <div class="section-label">// Files</div>
+    <div class="file-table-wrap">
+      <div class="table-header">
+        <span>Name</span>
+        <span>Size</span>
+        <span>Updated</span>
+        <span>Actions</span>
+      </div>
+      <div id="fileList">
+        <div class="empty-state">NO FILES FOUND</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- ── ログインモーダル ── -->
+<div id="loginModal" style="
+  display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85);
+  z-index:200; align-items:center; justify-content:center;">
+  <div style="
+    background:#141414; border:1px solid #2a2a2a; border-radius:4px;
+    padding:40px; width:320px; text-align:center;">
+    <div style="font-family:'Share Tech Mono',monospace; font-size:16px;
+      letter-spacing:3px; color:#00ff88; margin-bottom:24px; text-shadow:0 0 12px #00ff8866;">
+      🔐 LOGIN
+    </div>
+    <input id="passwordInput" type="password" placeholder="パスワードを入力"
+      style="width:100%; padding:10px 14px; background:#0d0d0d; border:1px solid #404040;
+        border-radius:2px; color:#e0e0e0; font-family:'Share Tech Mono',monospace;
+        font-size:13px; outline:none; margin-bottom:12px;"
+      onkeydown="if(event.key==='Enter') doLogin()" />
+    <button onclick="doLogin()" style="
+      width:100%; padding:10px; background:transparent; border:1px solid #00ff88;
+      border-radius:2px; color:#00ff88; font-family:'Share Tech Mono',monospace;
+      font-size:12px; letter-spacing:2px; cursor:pointer;">
+      ENTER
+    </button>
+    <div id="loginError" style="color:#ff4455; font-family:'Share Tech Mono',monospace;
+      font-size:11px; margin-top:10px; min-height:16px;"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  const API = '/api';
+  let isLoggedIn = false;
+
+  // ── Utils ──
+  function fmtSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 ** 2) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 ** 3) return (bytes / 1024 ** 2).toFixed(1) + ' MB';
+    return (bytes / 1024 ** 3).toFixed(2) + ' GB';
+  }
+
+  function fmtDate(iso) {
+    const d = new Date(iso);
+    return d.toLocaleDateString('ja-JP') + ' ' +
+           d.toTimeString().slice(0,5);
+  }
+
+  let toastTimer;
+  function toast(msg, isError = false) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'show' + (isError ? ' error' : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.className = '', 2800);
+  }
+
+  // ── 認証 ──
+  function showLogin() {
+    document.getElementById('loginModal').style.display = 'flex';
+    setTimeout(() => document.getElementById('passwordInput').focus(), 50);
+  }
+
+  function hideLogin() {
+    document.getElementById('loginModal').style.display = 'none';
+    document.getElementById('passwordInput').value = '';
+    document.getElementById('loginError').textContent = '';
+  }
+
+  async function doLogin() {
+    const password = document.getElementById('passwordInput').value;
+    if (!password) return;
+    try {
+      const res = await fetch(API + '/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById('loginError').textContent = data.error;
+        return;
+      }
+      isLoggedIn = true;
+      hideLogin();
+      updateAuthUI();
+      toast('ログインしました');
+      loadFiles();
+    } catch (e) {
+      document.getElementById('loginError').textContent = 'エラー: ' + e.message;
+    }
+  }
+
+  async function doLogout() {
+    await fetch(API + '/logout', { method: 'POST', credentials: 'include' });
+    isLoggedIn = false;
+    updateAuthUI();
+    toast('ログアウトしました');
+    loadFiles();
+  }
+
+  async function checkAuth() {
+    try {
+      const res = await fetch(API + '/auth/check', { credentials: 'include' });
+      isLoggedIn = res.ok;
+    } catch {
+      isLoggedIn = false;
+    }
+    updateAuthUI();
+  }
+
+  function updateAuthUI() {
+    // ヘッダーのログイン状態表示
+    document.getElementById('authStatus').textContent = isLoggedIn ? 'LOGGED IN' : 'GUEST';
+    document.getElementById('authBtn').textContent    = isLoggedIn ? 'LOGOUT' : 'LOGIN';
+    document.getElementById('authBtn').onclick        = isLoggedIn ? doLogout : showLogin;
+    // アップロードエリアの表示切替
+    document.getElementById('uploadSection').style.display = isLoggedIn ? 'block' : 'none';
+  }
+
+  // ── Fetch file list ──
+  async function loadFiles() {
+    try {
+      const res = await fetch(API + '/files', { credentials: 'include' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const files = await res.json();
+      renderFiles(files);
+    } catch (e) {
+      renderFiles([]);
+      toast('GoサーバーへのAPI接続失敗', true);
+    }
+  }
+
+  function renderFiles(files) {
+    const list = document.getElementById('fileList');
+    const totalSize = files.reduce((a, f) => a + f.size, 0);
+
+    document.getElementById('stat-count').textContent = files.length;
+    document.getElementById('stat-size').textContent = fmtSize(totalSize);
+    document.getElementById('header-count').textContent = files.length + ' FILES';
+    document.getElementById('header-size').textContent = fmtSize(totalSize);
+
+    if (!files.length) {
+      list.innerHTML = '<div class="empty-state">NO FILES FOUND</div>';
+      return;
+    }
+
+    list.innerHTML = files.map((f, i) => `
+      <div class="file-row" style="animation-delay:${i * 40}ms">
+        <div class="file-name" title="${f.name}">${f.name}</div>
+        <div class="file-size">${fmtSize(f.size)}</div>
+        <div class="file-date">${fmtDate(f.updated_at)}</div>
+        <div class="file-actions">
+          <a class="btn" href="${API}/files/${encodeURIComponent(f.name)}" download="${f.name}">DL</a>
+          ${isLoggedIn ? `<button class="btn btn-danger" onclick="deleteFile('${f.name}')">DEL</button>` : ''}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // ── Delete ──
+  async function deleteFile(name) {
+    if (!confirm(`"${name}" を削除しますか？`)) return;
+    try {
+      const res = await fetch(`${API}/files/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (res.status === 401) { showLogin(); return; }
+      if (!res.ok) throw new Error(data.error);
+      toast('削除完了: ' + name);
+      loadFiles();
+    } catch (e) {
+      toast('削除失敗: ' + e.message, true);
+    }
+  }
+
+  // ── Upload ──
+  async function uploadFiles(files) {
+    if (!files.length) return;
+    if (!isLoggedIn) { showLogin(); return; }
+    const bar = document.getElementById('progressBar');
+    const fill = document.getElementById('progressFill');
+    bar.classList.add('active');
+
+    for (let i = 0; i < files.length; i++) {
+      fill.style.width = Math.round((i / files.length) * 100) + '%';
+      const fd = new FormData();
+      fd.append('file', files[i]);
+      try {
+        const res = await fetch(API + '/upload', {
+          method: 'POST',
+          body: fd,
+          credentials: 'include',
+        });
+        const data = await res.json();
+        if (res.status === 401) { showLogin(); return; }
+        if (!res.ok) throw new Error(data.error);
+        toast('アップロード完了: ' + files[i].name);
+      } catch (e) {
+        toast('アップロード失敗: ' + e.message, true);
+      }
+    }
+
+    fill.style.width = '100%';
+    setTimeout(() => {
+      bar.classList.remove('active');
+      fill.style.width = '0%';
+    }, 600);
+
+    loadFiles();
+  }
+
+  // ── Drag & Drop ──
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('fileInput');
+
+  dropzone.addEventListener('dragover', e => {
+    e.preventDefault();
+    dropzone.classList.add('dragover');
+  });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropzone.classList.remove('dragover');
+    uploadFiles([...e.dataTransfer.files]);
+  });
+  fileInput.addEventListener('change', () => {
+    uploadFiles([...fileInput.files]);
+    fileInput.value = '';
+  });
+
+  // ── Init ──
+  checkAuth().then(() => loadFiles());
+  setInterval(loadFiles, 10000);
+</script>
+</body>
+</html>
